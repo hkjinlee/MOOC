@@ -1,0 +1,40 @@
+Pattern Discovery in Data Mining
+https://class.coursera.org/patterndiscovery-001
+===============================================
+
+# Frequent pattern mining
+
+```{r}
+library(arules)
+library(magrittr)
+
+'a,b
+a,b,c
+b,e,f
+a,b,d,e
+c,e,f' %>% textConnection %>% read.transactions(sep=',', format='basket') -> baskets
+
+inspect(baskets)
+nitems(baskets)
+itemInfo(baskets)
+```
+
+### mining frequent itemsets using ECLAT
+```{r}
+fitems <- eclat(baskets, parameter=list(support=.3))
+inspect(fitems)
+```
+
+```{r}
+rules <- apriori(baskets, parameter=list(support=.3, confidence=.5, minlen=1))
+inspect(rules)
+```
+
+# Sequence mining
+
+```{r}
+library(arulesSequences)
+
+
+```
+
