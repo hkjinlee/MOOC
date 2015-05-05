@@ -1,0 +1,188 @@
+# Week3: Logistic regression
+```{r}
+library(dplyr)
+library(caTools)
+
+quality <- read.csv('quality.csv')
+set.seed(88)
+split <- sample.split(quality$PoorCare, SplitRatio=.75)
+qualityTrain <- subset(quality, split==T)
+quality.model <- glm(PoorCare ~ OfficeVisits + Narcotics, data=qualityTrain, family=binomial)
+quality.model2 <- glm(PoorCare ~ ., data=qualityTrain, family=binomial)
+summary(quality.model)
+quality.pred <- predict(quality.model, type='response')
+
+library(ROCR)
+prediction <- prediction(quality.pred, qualityTrain$PoorCare)
+performance <- performance(prediction, measure="tpr", x.measure="fpr")
+plot(performance, colorize=T, print.cutoffs.at=seq(0, 1, 0.1))
+performance(prediction, 'auc')@y.values
+prediction2 <- prediction(predict(quality.model2, type='response'), qualityTrain$PoorCare)
+performance2 <- performance(prediction2, measure="tpr", x.measure="fpr")
+plot(performance2, colorize=T, print.cutoffs.at=seq(0, 1, 0.1))
+performance(prediction2, 'auc')@y.values
+```
+
+## Framingham Heart Study
+```{r}
+framingham <- read.csv('framingham.csv')
+
+library(caTools)
+set.seed(1000)
+
+split <- sample.split(framingham$TenYearCHD, SplitRatio=.65)
+framinghamTrain <- subset(framingham, split == T)
+framinghamTest <- subset(framingham, split == F)
+
+framingham.model <- glm(TenYearCHD ~ ., family=binomial, framinghamTrain)
+summary(framingham.model)
+framingham.pred <- predict(framingham.model, type='response', framinghamTest)
+table(framinghamTest$TenYearCHD, framingham.pred > 0.5)
+prediction <- prediction(framingham.pred, framinghamTest$TenYearCHD)
+performance(prediction, 'auc')@y.values
+```
+
+## US Election forecast
+```{r}
+poll <- read.csv('PollingData.csv')
+table(poll$Year)
+summary(poll)
+
+library(mice)
+set.seed(144)
+imputed <- complete(mice(poll %>% select(Rasmussen, SurveyUSA, PropR, DiffCount)))
+poll$Rasmussen <- imputed$Rasmussen
+poll$SurveyUSA <- imputed$SurveyUSA
+
+pollTrain <- poll %>% filter(Year %in% c(2004, 2008))
+pollTest <- poll %>% filter(Year == 2012)
+table(pollTrain$Republican)
+table(pollTrain$Republican, pollTrain$Rasmussen %>% sign)
+
+# Multicollinearity 체크, PropR이 다른 변수들과 가장 상관관계가 높음
+cor(pollTrain %>% select(-State, -Year))
+
+model1 <- glm(Republican ~ PropR, family=binomial, pollTrain)
+summary(model1)
+table(pollTrain$Republican, predict(model1, type='response', pollTrain) > 0.5)
+
+model2 <- glm(Republican ~ SurveyUSA + DiffCount, family=binomial, pollTrain)
+table(pollTrain$Republican, predict(model2, type='response', pollTrain) > 0.5)
+summary(model2)
+
+table(pollTest$Republican, predict(model2, type='response', pollTest) > 0.5)
+
+# 예측이 틀리게 나온 주는?: 플로리다. 실제로 설문조사상 큰 차이가 없었음
+pollTest %>% filter(Republican == 0, predict(model2, type='response', pollTest) > 0.5)
+```
+
+## Assignment #1
+```{r}
+songs <- read.csv('songs.csv')
+songs %>% filter(year == 2010)
+songs %>% filter(artistname == 'Michael Jackson') %>% select(songtitle, Top10) %>% arrange(songtitle)
+table(songs$timesignature)
+songs %>% arrange(-tempo) %>% head
+
+songsTrain <- songs %>% filter(year < 2010)
+songsTest <- songs %>% filter(year == 2010)
+
+songs.model <- glm(Top10 ~ ., songsTrain %>% select(-year, -songtitle, -artistname, -songID, -artistID), family=binomial)
+summary(songs.model)
+cor(songs$loudness, songs$energy)
+
+update(songs.model, ~ . -loudness) %>% summary
+update(songs.model, ~ . -energy) %>% summary
+songs.model <- update(songs.model, ~ . -energy)
+
+table(songsTest$Top10, predict(songs.model, songsTest, type='response') > 0.45)
+```
+
+## Assignment #2
+```{r}
+parole <- read.csv('parole.csv')
+table(parole$violator)
+parole <- parole %>% mutate_each(funs(as.factor), c(state, crime))
+
+set.seed(144)
+split <- sample.split(parole$violator, SplitRatio=.7)
+train <- parole %>% filter(split == T)
+test <- parole %>% filter(split == F)
+
+parole.model <- glm(violator ~ ., train, family=binomial)
+summary(parole.model)
+predict(parole.model, type='response', 
+        data.frame(male=1, race=1, age=50, state=as.factor(1), 
+                   time.served=3, max.sentence=12, multiple.offenses=0, crime=as.factor(2)))
+parole.pred <- predict(parole.model, type='response', test)
+summary(parole.pred)
+table(test$violator, parole.pred > 0.5)
+
+performance(prediction(parole.pred, test$violator), 'auc')@y.values
+```
+
+## Assignmnet #3
+```{r}
+loans <- read.csv('loans_imputed.csv')
+table(loans$not.fully.paid) %>% prop.table
+
+set.seed(144)
+loans <- loans %>% select(-not.fully.paid) %>% mice %>% complete %>% mutate(not.fully.paid=loans$not.fully.paid)
+summary(loans)
+summary(loans.impute)
+loansSplit <- sample.split(loans$not.fully.paid, SplitRatio=.7)
+loansTrain <- loans %>% filter(loansSplit == T)
+loansTest <- loans %>% filter(loansSplit == F)
+loans.model <- glm(not.fully.paid ~ ., loansTrain, family=binomial)
+summary(loans.model)
+loansPred <- predict(loans.model, type='response', loansTest)
+table(loansTest$not.fully.paid, loansPred >= 0.5) %>% addmargins
+performance(prediction(loansPred, loansTest$not.fully.paid), 'auc')
+
+loans.model2 <- glm(not.fully.paid ~ int.rate, loansTrain, family=binomial)
+summary(loans.model2)
+loansPred2 <- predict(loans.model2, type='response', loansTest)
+table(loansTest$not.fully.paid, loansPred2 >= 0.5) %>% addmargins
+performance(prediction(loansPred2, loansTest$not.fully.paid), 'auc')
+
+ifelse(loansTest$not.fully.paid == 1, -1, exp(loansTest$int.rate * 3) - 1) %>% summary
+loansTest %>% filter(int.rate >= .15) %>% transmute(e=ifelse(not.fully.paid == 1, -1, exp(int.rate * 3) - 1)) %>% summary
+loansTest %>% filter(int.rate >= .15) %>% .[['not.fully.paid']] %>% table %>% prop.table
+
+loansTest$risk.pred <- loansPred
+loansTest %>% filter(int.rate > .15) %>% arrange(risk.pred) %>% head(100) %>% 
+  transmute(e=ifelse(not.fully.paid == 1, -1, exp(int.rate * 3) - 1)) %>% summary
+loansTest %>% filter(int.rate >= .15) %>% arrange(risk.pred) %>% head(100) %>% .[['not.fully.paid']] %>% table
+```
+
+## Assignment #4
+```{r}
+baseball <- read.csv('baseball.csv')
+table(baseball$Year) %>% length
+baseball <- baseball %>% filter(!is.na(RankPlayoffs))
+baseball %>% group_by(Year) %>% summarise(teams=n()) %>% .[['teams']] %>% table
+baseball <- baseball %>% group_by(Year) %>% mutate(NumCompetitors=n()) %>% ungroup
+baseball %>% filter(NumCompetitors == 8)
+baseball <- baseball %>% mutate(WorldSeries=as.numeric(RankPlayoffs == 1))
+table(baseball$WorldSeries)
+
+# 변수를 한개씩만 뽑아서 model fitting
+Map(function(col) {
+  model <- glm(as.formula(paste0('WorldSeries ~ ', col)), family=binomial, baseball)
+  summary(model)
+}, colnames(baseball[, -17]))
+
+# 위에서 중요하다고 나온 변수를 모아서 다시 regression
+baseball.model <- glm(WorldSeries ~ Year + RA + RankSeason + NumCompetitors, family=binomial, baseball)
+# 어처구니없게도 모두 significance가 개똥. 아무래도 multicollinearity가 있는 듯.
+summary(baseball.model)
+# 확인해보면 실제로 있다
+baseball %>% select(Year, RA, RankSeason, NumCompetitors) %>% cor
+
+# 두개씩만 뽑아서 다시 regression model fitting
+Map(function(cols) {
+  col <- paste(cols, collapse='+')
+  model <- glm(as.formula(paste0('WorldSeries ~ ', col)), family=binomial, baseball)
+  setNames(AIC(model), col)
+}, combn(c('Year', 'RA', 'RankSeason', 'NumCompetitors'), m=2, simplify=F))
+```

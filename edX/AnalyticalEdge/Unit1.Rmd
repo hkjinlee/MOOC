@@ -1,0 +1,102 @@
+# Week 1
+```{r}
+library(dplyr)
+
+who <- read.csv('WHO.csv')
+mean(who$Over60)
+who %>% arrange(Over60) %>% filter(row_number() <= 5)
+who %>% arrange(-LiteracyRate) %>% head(2)
+who %>% group_by(Region) %>% summarise(mean(ChildMortality))
+```
+
+## Assignment: Analytical Detective
+```{r}
+library(lubridate)
+mvt <- read.csv('edX/AnalyticalEdge/mvtWeek1.csv')
+max(mvt$ID)
+min(mvt$Beat)
+sum(mvt$Arrest)
+sum(mvt$LocationDescription == 'ALLEY')
+dt <- as.Date(strptime(mvt$Date, '%m/%d/%y %H:%M'))
+median(dt)
+mvt$Month <- months(dt)
+mvt$Weekday <- weekdays(dt)
+mvt$Date <- dt
+table(mvt$Month) %>% sort
+table(mvt$Weekday) %>% sort
+mvt %>% group_by(Month) %>% summarise(sum=sum(Arrest)) %>% arrange(-sum)
+hist(mvt$Date, breaks=100)
+mvt %>% arrange(-Arrest) %>% boxplot(.$Date)
+mvt %>% filter(year(Date) == 2001) %>% summarise(sum(Arrest) / n())
+mvt %>% filter(year(Date) == 2007) %>% summarise(sum(Arrest) / n())
+mvt %>% filter(year(Date) == 2012) %>% summarise(sum(Arrest) / n())
+top5 <- mvt %>% group_by(LocationDescription) %>% summarise(n=n(), Arrest=sum(Arrest)) %>% arrange(-n) %>% 
+  filter(LocationDescription != 'OTHER') %>% head(5)
+top5 %>% mutate(Arrest/n)
+mvt %>% filter(LocationDescription == 'GAS STATION') %>% group_by(Weekday) %>% summarise(n())
+mvt %>% filter(LocationDescription == 'DRIVEWAY - RESIDENTIAL') %>% group_by(Weekday) %>% summarise(n=n()) %>% arrange(n)
+```
+
+## Assignment: Stock Dynamics
+```{r}
+stock <- Map(function(x) {
+  data <- read.csv(sprintf('%sStock.csv', x))
+  data$Date <- as.Date(data$Date, '%m/%d/%y')
+  data$Name <- x
+  data
+  }, c('IBM', 'GE', 'CocaCola', 'ProcterGamble', 'Boeing'))
+Map(NROW, stock)
+Map(function(x) min(x$Date), stock)
+Map(function(x) max(x$Date), stock)
+Map(function(x) summary(x$StockPrice), stock)
+Map(function(x) sd(x$StockPrice), stock)
+stock.merged <- Reduce(rbind, stock)
+
+library(ggplot2)
+stock.merged %>% ggplot(aes(x=Date, y=StockPrice, color=Name)) + geom_line() + facet_wrap(~Name, ncol=1, scales='free_y')
+stock.merged %>% filter(Name %in% c('CocaCola', 'ProcterGamble')) %>% 
+  ggplot(aes(x=Date, y=StockPrice, color=Name)) + geom_line()
+stock.merged %>% filter(year(Date) >= 1995) %>% ggplot(aes(x=Date, y=StockPrice, color=Name)) + geom_line()
+stock.merged %>% filter(year(Date) == 1997) %>% ggplot(aes(x=Date, y=StockPrice, color=Name)) + geom_line()
+stock.merged %>% filter(between(year(Date), 2004, 2005)) %>% ggplot(aes(x=Date, y=StockPrice, color=Name)) + geom_line()
+stock.merged %>% group_by(Name, month=month(Date)) %>% summarise(StockPrice=mean(StockPrice)) %>%
+  mutate(mean=mean(StockPrice)) %>%
+  ggplot(aes(x=month, y=StockPrice, color=Name)) + geom_line() + 
+  geom_hline(aes(yintercept=mean, color=Name), linetype='dashed') +
+  facet_wrap(~Name, ncol=1, scales='free_y')
+```
+
+## Assignment: Employment in the US
+```{r}
+cps <- read.csv('CPSData.csv')
+cps %>% filter(EmploymentStatus == 'Employed') %>% group_by(Industry) %>% summarise(n=n()) %>% arrange(-n)
+sort(table(cps$State))
+table(cps$Citizenship) %>% prop.table %>% .[1:2] %>% sum
+cps %>% filter(Hispanic == 1) %>% .$Race %>% table
+sapply(cps, function(x) any(is.na(x)))
+Map(function(x) table(cps[[x]], is.na(cps$Married)), c('Region', 'Sex', 'Age', 'Citizenship'))
+cps %>% group_by(State) %>% summarise(sum=sum(is.na(MetroAreaCode)), n=n()) %>% filter(sum == n) %>% NROW
+cps %>% group_by(State) %>% summarise(sum=sum(is.na(MetroAreaCode))) %>% filter(sum == 0) %>% NROW
+cps %>% group_by(Region) %>% summarise(sum=sum(is.na(MetroAreaCode)), ratio=sum/n())
+cps %>% group_by(State) %>% summarise(ratio=mean(is.na(MetroAreaCode))) %>% arrange(abs(ratio - 0.3))
+cps %>% group_by(State) %>% summarise(ratio=mean(is.na(MetroAreaCode))) %>% arrange(-ratio)
+
+area <- read.csv('MetroAreaCodes.csv')
+cps <- merge(cps, area, by.x='MetroAreaCode', by.y='Code', all.x=T)
+table(is.na(cps$MetroArea))
+table(cps$MetroArea) %>% sort
+cps %>% group_by(MetroArea) %>% summarise(ratio=mean(Hispanic)) %>% arrange(-ratio)
+cps %>% group_by(MetroArea) %>% summarise(ratio=sum(Race == 'Asian')/n()) %>% filter(ratio >= .2)
+cps %>% group_by(MetroArea) %>% summarise(ratio=mean(Education == 'No high school diploma', na.rm=T)) %>% arrange(ratio)
+
+country <- read.csv('CountryCodes.csv')
+cps <- merge(cps, country, by.x='CountryOfBirthCode', by.y='Code', all.x=T)
+table(is.na(cps$Country))
+table(cps$Country) %>% sort()
+cps %>% filter(MetroArea == 'New York-Northern New Jersey-Long Island, NY-NJ-PA') %>% 
+  summarise(mean(Country != 'United States', na.rm=T))
+cps %>% group_by(MetroArea) %>% summarise(n=sum(Country == 'India', na.rm=T)) %>% arrange(-n)
+cps %>% group_by(MetroArea) %>% summarise(n=sum(Country == 'Brazil', na.rm=T)) %>% arrange(-n)
+cps %>% group_by(MetroArea) %>% summarise(n=sum(Country == 'Somalia', na.rm=T)) %>% arrange(-n)
+```
+

@@ -1,0 +1,137 @@
+# Week 7
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+who <- read.csv('WHO.csv')
+ggplot(who, aes(x = FertilityRate, y = Under15, color = Region)) + geom_point() +
+  scale_color_brewer(palette = 'Dark2')
+
+library(lubridate)
+mvt <- read.csv('mvt.csv', stringsAsFactors = F) %>% mutate(Date = mdy_hm(Date)) %>%
+  mutate(Weekday = wday(Date, label = T)) %>%
+  mutate(Hour = hour(Date))
+
+table(mvt$Weekday) %>% as.data.frame %>%
+  ggplot(aes(x = Var1, y = Freq)) + geom_line(aes(group = 1), linetype = 2)
+
+table(mvt$Weekday, mvt$Hour) %>% as.data.frame %>%
+  mutate(Var2 = as.numeric(Var2)) %>%
+  ggplot(aes(x = Var2, y = Freq, group = Var1, color = Var1)) + geom_line()
+
+table(mvt$Weekday, mvt$Hour) %>% as.data.frame %>%
+  mutate(Var2 = as.numeric(Var2)) %>%
+  ggplot(aes(x = Var2, y = Var1, fill = Freq)) + geom_tile() +
+  scale_fill_gradient(low = 'white', high = 'red')
+
+library(maps)
+library(ggmap)
+
+chicago <- get_map(location = 'chicago', zoom = 11)
+ggmap(chicago) + geom_point(data = mvt[1:100, ], aes(x = Longitude, y = Latitude))
+
+latLonCounts <- table(round(mvt$Longitude, 2), round(mvt$Latitude, 2)) %>% as.data.frame %>%
+  mutate_each(funs(as.character(.) %>% as.numeric), c(Var1, Var2)) %>% 
+  filter(Freq > 0)
+ggmap(chicago) + geom_point(data = latLonCounts, aes(x = Var1, y = Var2, color = Freq, size = Freq)) +
+  scale_color_gradient(low = 'yellow', high = 'red')
+ggmap(chicago) + geom_tile(data = latLonCounts, aes(x = Var1, y = Var2, alpha = Freq), fill = 'red')
+
+states <- map_data('state')
+ggplot(states, aes(x = long, y = lat, group = group)) + geom_polygon(fill = 'white', color = 'black')
+
+murders <- read.csv('murders.csv') %>% mutate(region = tolower(State))
+murderMap <- left_join(states, murders, by = 'region')
+ggplot(murderMap, aes(x = long, y = lat, group = group, fill = GunOwnership / Population * 100000)) + 
+  geom_polygon(color = 'black') +
+  scale_fill_gradient(low = 'black', high = 'red', guide = 'legend')
+
+```
+
+## Assignments #1
+```{r}
+library(ggplot2)
+library(ggmap)
+library(maps)
+
+statesMap <- map_data('state')
+table(statesMap$group)
+
+ggplot(statesMap, aes(x = long, y = lat, group = group)) + 
+  geom_polygon(fill = 'white', color = 'black')
+
+library(caret)
+poll <- read.csv('PollingImputed.csv')
+train <- poll %>% filter(Year < 2012)
+test <- poll %>% filter(Year == 2012)
+
+model <- glm(Republican ~ SurveyUSA + DiffCount, data = train, family = binomial)
+predicted <- predict(model, test, type = 'response')
+
+prediction <- data.frame(predicted, predictedBin = as.numeric(predicted > 0.5), region = tolower(test$State))
+prediction %>% filter(predictedBin == 1)
+mean(predicted)
+
+predictionMap <- inner_join(statesMap, prediction) %>% arrange(order)
+ggplot(predictionMap, aes(x = long, y = lat, group = group, fill = predictedBin)) +
+  geom_polygon(color = 'black')
+ggplot(predictionMap, aes(x = long, y = lat, group = group, fill = predicted)) +
+  geom_polygon(color = 'black', linetype = 3, size = 3) +
+  scale_fill_gradient(low = 'blue', high = 'red', breaks = c(0, 1), labels = c('Dem', 'Rep'))
+
+prediction %>% filter(region == 'florida')
+```
+
+## Assignments #2
+```{r}
+edges <- read.csv('edges.csv')
+users <- read.csv('users.csv', stringsAsFactors = F)
+
+users %>% group_by(id) %>% summarise(n = edges %>% filter(V1 == id | V2 == id) %>% NROW) %>%
+  ungroup() %>% summarise(mean(n))
+users %>% filter(nchar(school) > 0) %>% {table(.$locale)} 
+table(users$gender, users$school)
+
+ibrary(igraph)
+g <- graph.data.frame(edges, F, users)
+plot(g, vertex.size = 5, vertex.label = NA)
+
+sum(degree(g) >= 10)
+V(g)$size <- degree(g) / 2 + 2
+plot(g, vertex.label = NA)
+V(g)$size %>% fivenum
+V(g)$color <- ifelse(V(g)$gender == 'A', 'red', ifelse(V(g)$gender == 'B', 'gray', 'black'))
+plot(g, vertex.label = NA)
+V(g)$color <- ifelse(V(g)$school == 'A', 'red', ifelse(V(g)$school == 'AB', 'gray', 'black'))
+plot(g, vertex.label = NA)
+V(g)$color <- ifelse(V(g)$locale == 'A', 'red', ifelse(V(g)$locale == 'B', 'yellow', 'black'))
+plot(g, vertex.label = NA)
+
+rglplot(g)
+```
+
+## Assignments #3
+```{r}
+library(tm)
+library(wordcloud)
+library(RColorBrewer)
+
+tweets <- read.csv('tweets.csv')
+allTweets <- tweets$Tweet %>% VectorSource %>% Corpus %>%
+  tm_map(content_transformer(tolower)) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(removeWords, stopwords('en')) %>%
+  tm_map(removeWords, c('apple')) %>%
+  DocumentTermMatrix %>%
+  as.matrix %>%
+  as.data.frame
+
+wordcloud(colnames(allTweets), colSums(allTweets), scale=c(2, 0.25), random.order = F, colors = brewer.pal(8, 'YlOrRd'))
+```
+
+## Assignments #4
+```{r}
+
+```
+

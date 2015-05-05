@@ -1,0 +1,263 @@
+Kaggle competition
+==================
+
+# 현재까지의 lessons learned
+- random forest는 굳이 training / validation 나누지 않아도 됨: 어차피 overfitting 없다
+
+
+```{r}
+library(dplyr)
+
+train.raw <- read.csv('NYTimesBlogTrain.csv', stringsAsFactors = F)
+test.raw <- read.csv('NYTimesBlogTest.csv', stringsAsFactors = F)
+raw <- bind_rows(train.raw, test.raw)
+table(raw$Popular, useNA = 'ifany')
+
+nytimes <- raw
+```
+
+# Data Exploration: 텍스트
+- NewsDesk, SectionName, SubsectionName은 모두 영향을 주는 변수가 맞음
+- Snippet과 Abstract는 사실상 동일하므로 Snippet은 drop
+
+```{r}
+library(stringdist)
+
+# Snippet과 Abstract는 사실 거의 동일한 데이터임. Snippet은 무시함
+stringdist(raw$Snippet, raw$Abstract) %>% table %>% { .[1] / sum(.) }
+
+# 일단 NewsDesk, SectionName, SubsectionName은 모두 영향을 주는 변수가 맞음
+nytimes %>% filter(!is.na(Popular)) %>% group_by(NewsDesk, SectionName, SubsectionName) %>% summarise(ratio=mean(Popular)) %>%
+  ggplot(aes(x=SubsectionName, y=ratio)) + geom_point()
+
+# SectionName과 SubsectionName의 관계는? 종속적이긴 한데 합칠 경우 factor의 level이 너무 높아지므로 그냥 놔둔다
+table(raw$SectionName, raw$SubsectionName)
+paste(raw$SectionName, train.raw$SubsectionName, sep = ' > ') %>% table %>% length
+
+# WordCount는 right skew되어있음. log변환해둔다
+nytimes <- nytimes %>% mutate(WordCountLog = log(WordCount + 1))
+```
+
+# 날짜 데이터 처리
+- 요일과 시간은 확실히 영향을 주는 factor임
+- 나머지는 의미없음
+
+```{r}
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+
+# 날짜 쪼개기
+nytimes <- nytimes %>% 
+  mutate(weekday = wday(ymd_hms(PubDate))) %>%
+  separate(PubDate, c('year', 'month', 'day', 'hour', 'minute', 'second')) %>%
+  mutate_each(funs(as.factor), c(year, month, day, hour, minute, second))
+
+# 요일은 확실히 영향을 준다
+nytimes %>% filter(!is.na(Popular)) %>% group_by(weekday) %>% summarise(ratio = mean(Popular)) %>%
+  ggplot(aes(weekday, ratio)) + geom_point()
+nytimes %>% filter(!is.na(Popular)) %>% { table(.$Popular, .$weekday) } %>% chisq.test
+
+# 월은? 거의 영향도 없어 보임
+nytimes %>% filter(!is.na(Popular)) %>% 
+  ggplot(aes(x=Popular, fill=month)) + geom_bar(position='fill')
+
+# 날짜는? 그림으로만은 판단하기 어려움
+nytimes %>% filter(!is.na(Popular)) %>% ggplot(aes(x=Popular, fill=day)) + geom_bar(position='fill')
+# 독립성 확인결과 p-value가 0.7: 사실 의미없다
+nytimes %>% filter(!is.na(Popular)) %>% { table(.$Popular, .$day) } %>% chisq.test
+
+# 시간: 영향도 있음
+nytimes %>% filter(!is.na(Popular)) %>% group_by(hour) %>% summarise(ratio = mean(Popular)) %>%
+  ggplot(aes(hour, ratio)) + geom_point()
+nytimes %>% filter(!is.na(Popular)) %>% { table(.$Popular, .$hour) } %>% chisq.test
+
+# 분/초: 영향도 없음
+nytimes %>% filter(!is.na(Popular)) %>% group_by(minute) %>% summarise(ratio = mean(Popular)) %>%
+  ggplot(aes(minute, ratio)) + geom_point()
+nytimes %>% filter(!is.na(Popular)) %>% group_by(second) %>% summarise(ratio = mean(Popular)) %>%
+  ggplot(aes(second, ratio)) + geom_point()
+```
+
+# text processing
+- 제목과 본문에 대해 bag of words를 뽑아서 data frame에 추가
+- 초기 접근: sparse word를 제거
+- 두번째 접근: Popular와 correlation을 가진 키워드 위주로 추출
+- 세번째 접근: 두번째 접근 + test set에도 들어있는 키워드로 추출
+
+```{r}
+library(tm)
+library(tau)
+library(Matrix)
+
+corpora <- Map({ . %>% VectorSource %>% Corpus %>% tm_map(content_transformer(tolower)) %>%
+                  tm_map(removePunctuation) %>% tm_map(removeWords, stopwords('english')) %>%
+                  tm_map(stemDocument)},
+               list(nytimes$Headline, nytimes$Abstract))
+nytimes <- nytimes %>% select(-Headline, -Abstract)
+
+# 1차 시도
+dtms <- Map(DocumentTermMatrix, corpora)
+dtms[[1]] %>% removeSparseTerms(sparse = .99) %>% inspect %>% colMeans
+dtms[[2]] %>% removeSparseTerms(sparse = .99) %>% dim
+dtms <- Map({ . %>% removeSparseTerms(sparse = .99) }, dtms)
+
+words <- Map(function(dtm, name) dtm %>% as.matrix %>% data.frame %>% { colnames(.) <- paste(colnames(.), name, sep='.'); . }, 
+             dtms, c('H', 'B'))
+nytimes <- cbind(nytimes %>% select(-ends_with('.H'), -ends_with('.B')), words[[1]], words[[2]])
+
+# 2차 시도
+tokenizer <- function(x) textcnt(x$content, method = 'string', n = 2) %>% names
+dtm <- Reduce(cBind, Map(function(corpus, suffix) {
+  dtm <- DocumentTermMatrix(corpus, control=list(tokenizer=tokenizer))
+  sparseMatrix(i = dtm$i, j = dtm$j, x = dtm$v, dims = c(dtm$nrow, dtm$ncol), 
+               dimnames = list(NULL, paste(gsub(' ', '.', Terms(dtm)), suffix, sep='.')))
+  }, corpora, c('H', 'B')))
+dtm %>% { setNames(colMeans(.), colnames(.)) } %>% sort(dec=T) %>% head %>% names
+
+# training set과 test set에 모두 2회 이상 들어있는 표현을 추출: 총 688개
+appearsBoth <- (colSums(dtm[1:NROW(train.raw), ]) > 1) & (colSums(dtm[(NROW(train.raw)+1):NROW(raw), ]) > 1)
+dtmBrief <- dtm[, appearsBoth]
+
+# 인기도와 연관도가 높은 표현만 필터링
+cor <- Reduce(c, Map(function(i) cor(dtmBrief[1:NROW(train.raw), i], train.raw$Popular), seq(1, dim(dtmBrief)[2])))
+hist(cor)
+mainWordIndices <- ifelse(is.na(cor), F, abs(cor) > 0.03)
+sum(mainWordIndices)
+
+# 3차 시도: TF-IDF
+tokenizer <- function(x) textcnt(x$content, method = 'string', n = 2) %>% names
+dtmTfIdf <- Reduce(cBind, Map(function(corpus, suffix) {
+  dtm <- DocumentTermMatrix(corpus, control=list(tokenizer=tokenizer, weighting=weightTfIdf))
+  sparseMatrix(i = dtm$i, j = dtm$j, x = dtm$v, dims = c(dtm$nrow, dtm$ncol), 
+               dimnames = list(NULL, paste(gsub(' ', '.', Terms(dtm)), suffix, sep='.')))
+  }, corpora, c('H', 'B')))
+
+# 인기도와 연관도가 높은 표현 상위 200개만 필터링
+cor <- Reduce(c, Map(function(i) cor(dtmTfIdf[1:NROW(train.raw), i], train.raw$Popular), seq(1, dim(dtmTfIdf)[2])))
+hist(cor, breaks=100)
+qplot(cor, log='y', geom='histogram')
+summary(cor)
+sum(ifelse(is.na(cor), F, cor > 0))
+dtmBrief <- dtmTfIdf[, -cor %>% rank %>% { . <= 200 }]
+
+# 4차 시도: TF-IDF, but no correlation check
+dtmBrief <- dtmTfIdf[, -colSums(dtmTfIdf) %>% rank %>% {. <= 200 }]
+
+nytimes <- nytimes %>% select(-ends_with('.H'), -ends_with('.B'))
+nytimes <- cbind(nytimes, dtmBrief %>% as.matrix)
+```
+
+# 함수들 미리 정의해둠
+
+```{r}
+pred <- function(model, data) {
+  switch(class(model)[1], 
+         rpart = predict(model, data)[, 2],
+         randomForest.formula = predict(model, data),
+         train = predict(model, data, type = 'prob')[, 2]
+         )
+}
+
+accuracy <- function(model, data) {
+  t <- table(data$Popular, pred(model, data) > 0.5)
+  print(t)
+  sum(t * diag(2)) / sum(t)
+}
+
+auc <- function(model, data, plot = F) {
+  prediction <- prediction(pred(model, data), data$Popular)
+  if (plot) 
+    plot(performance(prediction, 'tpr', 'fpr'))
+  else 
+    performance(prediction, 'auc')@y.values
+}
+```
+
+# Model fitting
+- 웬만해서는 CART 모델은 bag-of-words를 사용하지 않는다: 좀더 연관성있는 키워드를 찾아내야 할 듯
+
+```{r}
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(ROCR)
+
+# NA가 들어있는 데이터는 없는가?
+nytimes.clean <- nytimes %>% mutate(Popular = factor(Popular, labels=c('NO', 'YES'))) %>% 
+  select(-UniqueID, -year, -month, -day, -minute, -second, -WordCount, -Snippet)
+nytimes.src <- nytimes.clean %>% filter(!is.na(Popular))
+nytimes.test <- nytimes.clean %>% filter(is.na(Popular))
+
+set.seed(1000)
+split <- createDataPartition(nytimes.src$Popular, p = .8, list=F)
+nytimes.train <- nytimes.src[split, ]
+nytimes.validation <- nytimes.src[-split, ]
+
+fit.formula <- Popular ~ .
+
+# CART: validation auc = 0.8017416
+fit.rpart <- rpart(fit.formula, nytimes.train)
+prp(fit.rpart)
+accuracy(fit.rpart, nytimes.train)
+auc(fit.rpart, nytimes.train)
+accuracy(fit.rpart, nytimes.validation)
+auc(fit.rpart, nytimes.validation)
+
+# caret CART: validation auc = 0.8249264
+fit.caret.rpart <- train(fit.formula, nytimes.train, method = 'rpart', metric = 'ROC',
+                         trControl = trainControl(classProbs = T, summaryFunction = twoClassSummary))
+fit.caret.rpart # cp = 0.03771429
+prp(fit.caret.rpart$finalModel)
+accuracy(fit.caret.rpart, nytimes.train)
+auc(fit.caret.rpart, nytimes.train)
+accuracy(fit.caret.rpart, nytimes.validation)
+auc(fit.caret.rpart, nytimes.validation)
+
+# SVM: validation auc = 0.9240651
+fit.caret.svm <- train(fit.formula, nytimes.train, method = 'svmLinear', metric = 'ROC',
+                       tuneGrid = expand.grid(C = 1),
+                       trControl = trainControl(classProbs = T, summaryFunction = twoClassSummary))
+fit.caret.svm
+accuracy(fit.caret.svm, nytimes.train)
+auc(fit.caret.svm, nytimes.train)
+accuracy(fit.caret.svm, nytimes.validation)
+auc(fit.caret.svm, nytimes.validation)
+
+# caret random forest: validation auc = 0.9494442
+fit.caret.rf <- train(fit.formula, nytimes.src, method = 'rf', metric = 'ROC', 
+                      tuneLength = 1,
+                      trControl = trainControl(method = 'none', classProbs = T, summaryFunction = twoClassSummary))
+fit.caret.rf$finalModel
+varImpPlot(fit.caret.rf$finalModel)
+plot(fit.caret.rf$finalModel, log = 'y')
+importance(fit.caret.rf$finalModel)
+
+accuracy(fit.caret.rf, nytimes.train)
+auc(fit.caret.rf, nytimes.train)
+accuracy(fit.caret.rf, nytimes.validation)
+auc(fit.caret.rf, nytimes.validation)
+
+# gbm
+fit.caret.gbm <- train(fit.formula, nytimes.src, methd = 'gbm', metric = 'ROC',
+                       trControl = trainControl(classProbs = T, summaryFunction = twoClassSummary))
+
+
+# kNN: validation auc = 0.9083029
+fit.caret.knn <- train(fit.formula, nytimes.train, method = 'knn', metric = 'ROC',
+                       trControl = trainControl(classProbs = T, summaryFunction = twoClassSummary))
+fit.caret.knn
+accuracy(fit.caret.knn, nytimes.train)
+auc(fit.caret.knn, nytimes.train)
+accuracy(fit.caret.knn, nytimes.validation)
+auc(fit.caret.knn, nytimes.validation)
+```
+
+최종 제출용 파일 생성
+```{r}
+predicted <- pred(fit.caret.rf, nytimes.test)
+head(predicted)
+write.csv(data.frame(UniqueID=test.raw$UniqueID, Probability1=predicted), 'submission.csv', row.names = F)
+```
+

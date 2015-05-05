@@ -1,0 +1,148 @@
+# Week 6
+
+```{r}
+library(dplyr)
+
+movies <- read.table('movieLens.txt', sep='|', quote='\"')
+colnames(movies) <- c('ID', 'Title', 'ReleaseDate', 'VideoReleaseDate', 'IMDB', 'Unknown',
+                      'Action', 'Adventure', 'Animation', 'Childrens', 'Comedy',
+                      'Crime', 'Documentary', 'Drama', 'Fantasy', 'FilmNoir', 'Horror',
+                      'Musical', 'Mystery', 'Romance', 'SciFi', 'Thriller', 'War', 'Western')
+movies <- movies %>% select(-ID, -ReleaseDate, -VideoReleaseDate, -IMDB) %>% unique
+movies %>% filter(Comedy == 1) %>% NROW
+movies %>% filter(Western == 1) %>% NROW
+movies %>% filter(Romance == 1 & Drama == 1) %>% NROW
+
+distances <- dist(movies %>% select(-Title), method = 'euclidean')
+clusterMovies <- hclust(distances, method = 'ward.D')
+plot(clusterMovies)
+clusterGroups <- cutree(clusterMovies, k = 10)
+tapply(movies$Action, clusterGroups, mean)
+
+movies %>% filter(clusterGroups == 2) %>% select(Title) %>% head
+
+clusterGroups <- cutree(clusterMovies, k = 2)
+movies %>% filter(clusterGroups == 2) %>% head
+```
+
+## Assignment #1
+```{r}
+dailykos <- read.csv('dailykos.csv')
+hclust <- hclust(dist(dailykos, method = 'euclidean'), method = 'ward.D')
+dailykos$hclust <- cutree(hclust, k = 7)
+dailykos %>% filter(hclust == 3) %>% NROW
+dailykos$hclust %>% table
+
+dailykos %>% filter(hclust == 1) %>% select(-cluster) %>% colMeans %>% sort %>% tail
+dailykos %>% filter(hclust == 2) %>% select(-cluster) %>% colMeans %>% sort %>% tail
+
+library(tidyr)
+dailykos %>% group_by(hclust) %>% summarise_each(funs(mean)) %>% 
+  gather(word, frequency, -hclust) %>% 
+  group_by(hclust) %>% mutate(rank = row_number(-frequency)) %>% filter(rank <= 10) %>% 
+  select(-frequency) %>% spread(rank, word)
+
+set.seed(1000)
+kmeans <- kmeans(dailykos %>% select(-hclust), 7)
+dailykos$kmeans <- kmeans$cluster
+dailykos %>% group_by(kmeans) %>% summarise_each(funs(mean)) %>% 
+  gather(word, frequency, -kmeans) %>% 
+  group_by(kmeans) %>% mutate(rank = row_number(-frequency)) %>% filter(rank <= 10) %>% 
+  select(-frequency) %>% spread(rank, word)
+
+table(dailykos$hclust, dailykos$kmeans)
+```
+
+## Assignment #2
+```{r}
+airline <- read.csv('AirlinesCluster.csv')
+summary(airline)
+
+library(caret)
+airlineNorm <- predict(preProcess(airline), airline)
+
+hclust <- hclust(dist(airlineNorm, method = 'euclidean'), method = 'ward.D')
+plot(hclust)
+airlineNorm$hclust <- cutree(hclust, k = 5)
+
+airlineNorm %>% group_by(hclust) %>% summarise_each(funs(mean))
+
+set.seed(88)
+airlineNorm$kmeans <- kmeans(airlineNorm, 5, iter.max = 1000)$cluster
+table(airlineNorm$kmeans)
+
+with(airlineNorm, table(hclust, kmeans))
+```
+
+## Assignment #3
+```{r}
+stock <- read.csv('StocksCluster.csv')
+table(stock$PositiveDec) %>% prop.table
+max(cor(stock[, -12]) * (1 - diag(11)))
+colMeans(stock) %>% sort
+
+library(caTools)
+set.seed(144)
+split <- sample.split(stock$PositiveDec, SplitRatio = .7)
+stockTrain <- stock[split, ]
+stockTest <- stock[!split, ]
+stockModel <- glm(PositiveDec ~ ., stockTrain, family=binomial)
+table(predict(stockModel, stockTrain, type = 'response') > 0.5, stockTrain$PositiveDec) %>% { sum(. * diag(2)) / sum(.) }
+table(predict(stockModel, stockTest, type = 'response') > 0.5, stockTest$PositiveDec) %>% { sum(. * diag(2)) / sum(.) }
+table(stockTest$PositiveDec) %>% prop.table
+
+preproc <- preProcess(stockTrain %>% select(-PositiveDec))
+normTrain <- stockTrain %>% select(-PositiveDec) %>% predict(preproc, .)
+normTest <- stockTest %>% select(-PositiveDec) %>% predict(preproc, .)
+normTrain$ReturnJan %>% mean
+normTest$ReturnJan %>% mean
+
+set.seed(144)
+kmeans <- kmeans(normTrain, 3)
+table(kmeans$cluster)
+
+library(flexclust)
+kmeans.kcca <- as.kcca(kmeans, normTrain)
+clusterTrain <- predict(kmeans.kcca)
+clusterTest <- predict(kmeans.kcca, normTest)
+table(clusterTest)
+
+stockTrain %>% mutate(cluster = clusterTrain) %>% group_by(cluster) %>% summarise(mean(PositiveDec))
+trains <- Map(function(x) { stockTrain %>% filter(clusterTrain == x) }, 1:3)
+tests <- Map(function(x) { stockTest %>% filter(clusterTest == x) }, 1:3)
+models <- Map(function(x) { glm(PositiveDec ~ ., x, family=binomial) }, trains)
+Reduce(rbind, Map(function(x) { x$coefficients }, models))
+
+Map(function(model, test) table(test$PositiveDec, predict(model, test, type='response') > 0.5), models, tests) %>%
+  Reduce(`+`, .) %>% { sum(. * diag(2)) / sum(.) }
+
+```
+
+## Recitation
+```{r}
+flower <- read.csv('flower.csv', header = F) %>% as.matrix
+hclust <- hclust(dist(flower %>% as.vector, method = 'euclidean'), method = 'ward.D')
+plot(hclust)
+rect.hclust(hclust, k = 3, border = 'red')
+flowerClusters <- cutree(hclust, k = 3)
+dim(flowerClusters) <- c(50, 50)
+image(flowerClusters)
+image(flower, col = grey(seq(0, 1, length = 256)))
+
+healthy <- read.csv('healthy.csv', header = F) %>% as.matrix
+image(healthy, col = grey(seq(0, 1, length = 256)))
+hclust <- hclust(dist(healthy %>% as.vector, method = 'euclidean'), method = 'ward.D') # doesn't work
+
+set.seed(1)
+kmeans <- kmeans(healthy %>% as.vector, centers=5, iter.max=1000)
+str(kmeans)
+healthyClusters <- kmeans$cluster %>% { dim(.) <- dim(healthy); . }
+image(healthyClusters, col = rainbow(5))
+
+library(flexclust)
+tumor <- read.csv('tumor.csv', header = F) %>% as.matrix
+kmeans.kcca <- as.kcca(kmeans, healthy %>% as.vector)
+tumorClusters <- predict(kmeans.kcca, tumor %>% as.vector) %>% { dim(.) <- dim(tumor); . }
+image(tumorClusters, col = rainbow(5))
+```
+

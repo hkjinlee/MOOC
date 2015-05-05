@@ -1,0 +1,110 @@
+# Week2: Linear regression
+```{r}
+library(dplyr)
+
+y <- c(2, 2, 8)
+y1 <- c(2, 5, 5)
+(y - y1)^2 %>% sum
+(y - mean(y))^2 %>% sum
+
+wine <- read.csv('wine.csv')
+model1 <- lm(Price ~ AGST, wine)
+summary(model1)
+sum(model1$residuals^2)
+plot(model1$residuals)
+model2 <- lm(Price ~ AGST + HarvestRain, wine)
+summary(model2)
+sum(model2$residuals^2)
+model3 <- lm(Price ~ AGST + HarvestRain + WinterRain + Age + FrancePop, wine)
+summary(model3)
+sum(model3$residuals^2)
+model4 <- lm(Price ~ AGST + HarvestRain + WinterRain + Age, wine)
+summary(model4)
+sum(model4$residuals^2)
+
+model <- lm(Price ~ HarvestRain + WinterRain, wine)
+summary(model)
+
+cor(wine$HarvestRain, wine$WinterRain)
+
+wineTest <- read.csv('wine_test.csv')
+pred <- predict(model4, wineTest)
+sum((wineTest$Price - pred)^2)
+sum((wineTest$Price - mean(wineTest$Price))^2)
+
+baseball <- read.csv('baseball.csv')
+moneyball <- baseball %>% filter(Year < 2002) %>% mutate(RD = RS - RA)
+mbmodel <- lm(W ~ RD, moneyball)
+summary(mbmodel)
+predict(mbmodel, data.frame(RD=713 - 614))
+summary(lm(RS ~ OBP + SLG + BA, moneyball))
+summary(lm(RS ~ OBP + SLG, moneyball))
+predict(lm(RS ~ OBP + SLG, moneyball), data.frame(OBP=.311, SLG=.405))
+predict(lm(RA ~ OOBP + OSLG, moneyball), data.frame(OOBP=.297, OSLG=.370))
+teamRank <- c(1, 2, 3, 3, 4, 4, 4, 4, 5, 5)
+wins2012 <- c(SF=94, DE=88, NY=95, SL=88, BA=93, OA=94, WA=98, CI=97, TX=93, AT=94)
+wins2013 <- c(BO=97, SL=97, LA=92, DE=93, TB=92, OA=96, PT=94, AT=96, CL=92, CI=90)
+cor(teamRank, wins2012)
+cor(teamRank, wins2013)
+```
+
+# Week2: Lab
+```{r}
+climate <- read.csv('climate_change.csv')
+climate.train <- climate %>% filter(Year <= 2006)
+climate.test <- climate %>% filter(Year > 2006)
+climate.model <- lm(Temp ~ MEI + CO2 + CH4 + N2O + CFC.11 + CFC.12 + TSI + Aerosols, data=climate.train)
+climate.model %>% summary
+cor(climate.train)
+lm(Temp ~ MEI + TSI + Aerosols + N2O, data=climate.train) %>% summary
+climate.train <- step(climate.model)
+climate.pred <- predict(climate.train, climate.test)
+1 - sum((climate.pred - climate.test$Temp)^2)/sum((climate.test$Temp - mean(climate.train$Temp))^2)
+
+pisaTrain <- read.csv('pisa2009train.csv')
+pisaTest <- read.csv('pisa2009test.csv')
+pisaTrain %>% group_by(male) %>% summarise(mean(readingScore))
+sapply(pisaTrain, function(x) any(is.na(x)))
+pisaTrain <- na.omit(pisaTrain)
+pisaTest <- na.omit(pisaTest)
+pisaTrain %>% select(grade, male, raceeth) %>% summary
+table(pisaTrain$raceeth)
+pisaTrain$raceeth <- relevel(pisaTrain$raceeth, "White")
+pisaTest$raceeth <- relevel(pisaTest$raceeth, "White")
+pisaModel <- lm(readingScore ~ ., pisaTrain) 
+pisaModel %>% summary
+pisaModel %>% resid %>% .^2 %>% mean %>% sqrt
+pisaPredict <- predict(pisaModel, pisaTest)
+sum((pisaPredict - pisaTest$readingScore)^2)
+(pisaPredict - pisaTest$readingScore)^2 %>% mean %>% sqrt
+mean(pisaTrain$readingScore)
+(mean(pisaTrain$readingScore) - pisaTest$readingScore)^2 %>% sum
+1 - (5762082 / 7802354)
+
+fluTrain <- read.csv('FluTrain.csv')
+fluTrain %>% arrange(-ILI) %>% head(1)
+fluTrain %>% arrange(-Queries) %>% head(1)
+library(ggplot2)
+library(tidyr)
+fluTrain %>% gather(var, value, ILI:Queries) %>% ggplot(aes(x=Week, y=value, group=var)) + geom_line()
+hist(fluTrain$ILI)
+hist(fluTrain$Queries)
+plot(fluTrain$Queries, log(fluTrain$ILI))
+fluModel <- lm(log(ILI) ~ Queries, fluTrain)
+fluModel %>% summary
+fluTest <- read.csv('FluTest.csv')
+fluPred <- predict(fluModel, fluTest %>% filter(Week == '2012-03-11 - 2012-03-17')) %>% exp
+(fluTest %>% filter(Week == '2012-03-11 - 2012-03-17') %>% .[['ILI']] - fluPred) / (fluTest %>% filter(Week == '2012-03-11 - 2012-03-17') %>% .[['ILI']])
+(fluTest$ILI - predict(fluModel, fluTest) %>% exp)^2 %>% mean %>% sqrt
+library(zoo)
+fluTrain$ILILag2 <- fluTrain$ILI %>% zoo %>% lag(-2, na.pad=T) %>% coredata
+qplot(fluTrain$ILI, fluTrain$ILILag2, log='xy')
+fluModel2 <- lm(log(ILI) ~ Queries + log(ILILag2), fluTrain)
+fluModel2 %>% summary
+fluTest$ILILag2 <- fluTest$ILI %>% zoo %>% lag(-2, na.pad=T) %>% coredata
+fluTest$ILILag2 %>% summary
+fluTest$ILILag2[1:2] <- fluTrain$ILI %>% tail(2)
+fluPred2 <- predict(fluModel2, fluTest) %>% exp
+(fluTest$ILI - fluPred2)^2 %>% mean %>% sqrt
+```
+

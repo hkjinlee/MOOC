@@ -1,0 +1,218 @@
+# Week 5
+
+```{r}
+library(dplyr)
+library(tm)
+library(SnowballC)
+
+tweets <- read.csv('tweets.csv', stringsAsFactors=F)
+options(mc.cores=1)
+
+corpus <- Corpus(VectorSource(tweets$Tweet))
+corpus <- corpus %>% tm_map(content_transformer(tolower)) %>% 
+  tm_map(removePunctuation) %>% 
+  tm_map(removeWords, c(stopwords('english'), 'apple')) %>%
+  tm_map(stemDocument)
+
+dtm <- DocumentTermMatrix(corpus)
+findFreqTerms(dtm, lowfreq=100)
+sparse <- removeSparseTerms(dtm, 0.995)
+tweetsSparse <- as.data.frame(as.matrix(sparse))
+colnames(tweetsSparse) <- make.names(colnames(tweetsSparse))
+tweetsSparse$Negative <- as.factor(tweets$Avg <= -1)
+
+library(caTools)
+set.seed(123)
+split <- sample.split(tweetsSparse$Negative, SplitRatio=.7)
+tweetsTrain <- tweetsSparse[split, ]
+tweetsTest <- tweetsSparse[!split, ]
+
+library(rpart)
+library(rpart.plot)
+tweet.cart <- rpart(Negative ~ ., data=tweetsTrain, method='class')
+prp(tweet.cart)
+table(tweetsTest$Negative, predict(tweet.cart, tweetsTest, type='class'))
+
+library(randomForest)
+tweet.rf <- randomForest(Negative ~ ., data=tweetsTrain)
+table(tweetsTest$Negative, predict(tweet.rf, tweetsTest))
+
+tweet.nb <- glm(Negative ~ ., data=tweetsTrain, family=binomial)
+table(tweetsTest$Negative, predict(tweet.nb, tweetsTest, type='response') > 0.5) %>% { sum(. * diag(2)) / sum(.) }
+```
+
+## Recitation
+```{r}
+library(tm)
+library(rpart)
+
+emails <- read.csv('energy_bids.csv', stringsAsFactors = F)
+corpus <- emails$email %>% VectorSource %>% Corpus %>% 
+  tm_map(content_transformer(tolower)) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(removeWords, stopwords('english')) %>%
+  tm_map(stemDocument)
+strwrap(corpus[[1]])
+
+dtm <- DocumentTermMatrix(corpus) %>% removeSparseTerms(0.97)
+words <- dtm %>% as.matrix %>% as.data.frame
+
+emails.src <- cbind(words, responsive = emails$responsive)
+rpart <- rpart(responsive ~ ., emails.src, method = 'class')
+
+library(rpart.plot)
+prp(rpart)
+```
+
+## Assignment #1
+```{r}
+wiki <- read.csv('wiki.csv', stringsAsFactors=F) %>% mutate_each(funs(as.factor), c(Vandal))
+
+library(tm)
+dtmAdded <- Corpus(VectorSource(wiki$Added)) %>%
+  tm_map(removeWords, stopwords('english')) %>%
+  tm_map(stemDocument) %>%
+  DocumentTermMatrix
+
+sparseAdded <- dtmAdded %>% removeSparseTerms(sparse=.997)
+wordsAdded <- sparseAdded %>% as.matrix %>% data.frame %>% { colnames(.) <- paste('A', colnames(.)); . }
+
+dtmRemoved <- Corpus(VectorSource(wiki$Removed)) %>%
+  tm_map(removeWords, stopwords('english')) %>%
+  tm_map(stemDocument) %>%
+  DocumentTermMatrix
+
+sparseRemoved <- dtmRemoved %>% removeSparseTerms(sparse=.997) 
+wordsRemoved <- sparseRemoved %>% as.matrix %>% data.frame %>% { colnames(.) <- paste('R', colnames(.)); . }
+
+library(caTools)
+wikiWords <- bind_cols(wordsAdded, wordsRemoved) %>% mutate(Vandal = wiki$Vandal)
+set.seed(123)
+split <- sample.split(wikiWords$Vandal, SplitRatio = .7)
+wikiTrain <- wikiWords[split, ]
+wikiTest <- wikiWords[!split, ]
+
+table(wikiTest$Vandal)
+
+wiki.cart <- rpart(Vandal ~ ., wikiTrain, method = 'class')
+table(wikiTest$Vandal, predict(wiki.cart, wikiTest, type = 'class')) %>% { sum(. * diag(2)) / sum(.) }
+summary(wiki.cart)
+prp(wiki.cart)
+
+wikiWords2 <- wikiWords %>% mutate(HTTP = ifelse(grepl('http', wiki$Added), 1, 0))
+table(wikiWords2$HTTP)
+
+wikiTrain2 <- wikiWords2[split, ]
+wikiTest2 <- wikiWords2[!split, ]
+wiki.cart2 <- rpart(Vandal ~ ., wikiTrain2, method = 'class')
+table(wikiTest2$Vandal, predict(wiki.cart2, wikiTest2, type = 'class')) %>% { sum(. * diag(2)) / sum(.) }
+
+wikiWords2 <- wikiWords2 %>% mutate(NumWordsAdded = rowSums(as.matrix(dtmAdded)),
+                                    NumWordsRemoved = rowSums(as.matrix(dtmRemoved)))
+wikiTrain3 <- wikiWords2[split, ]
+wikiTest3 <- wikiWords2[!split, ]
+wiki.cart3 <- rpart(Vandal ~ ., wikiTrain3, method = 'class')
+table(wikiTest3$Vandal, predict(wiki.cart3, wikiTest3, type = 'class')) %>% { sum(. * diag(2)) / sum(.) }
+
+wikiWords3 <- wikiWords2 %>% mutate(Minor = wiki$Minor, LoggedIn = wiki$Loggedin)
+wikiTrain4 <- wikiWords3[split, ]
+wikiTest4 <- wikiWords3[!split, ]
+wiki.cart4 <- rpart(Vandal ~ ., wikiTrain4, method = 'class')
+table(wikiTest4$Vandal, predict(wiki.cart4, wikiTest4, type = 'class')) %>% { sum(. * diag(2)) / sum(.) }
+
+prp(wiki.cart4)
+```
+
+## Assignment #2
+```{r}
+trials <- read.csv('clinical_trial.csv', stringsAsFactors=F)
+nchar(trials$abstract) %>% max
+trials %>% arrange(nchar(title)) %>% head
+
+library(tm)
+corpus <- Map({ . %>% VectorSource %>% Corpus %>% tm_map(content_transformer(tolower)) %>%
+                 tm_map(removePunctuation) %>% tm_map(removeWords, stopwords('english')) %>%
+                 tm_map(stemDocument) }, list(trials$title, trials$abstract))
+trial.sparse <- Map({ . %>% DocumentTermMatrix %>% removeSparseTerms(sparse=.95) %>% as.matrix %>% data.frame },
+                    corpus)
+lapply(trial.sparse, ncol)
+
+colSums(trial.sparse[[2]]) %>% which.max
+
+trial.words <- Map(function(x, y) { colnames(x) <- paste0(y, colnames(x)); x }, trial.sparse, c('T', 'A')) %>% 
+  unlist(recursive = F) %>% data.frame
+trial.words$trial <- trials$trial
+
+library(caTools)
+set.seed(144)
+split <- sample.split(trials$trial, SplitRatio = .7)
+trialTrain <- trial.words[split, ]
+trialTest <- trial.words[!split, ]
+table(trials$trial) %>% { max(.) / sum(.) }
+
+library(rpart)
+trial.cart <- rpart(trial ~ ., data=trialTrain, method = 'class')
+prp(trial.cart)
+summary(trial.cart)
+table(trialTrain$trial, predict(trial.cart, type = 'class'))
+
+library(ROCR)
+table(trialTest$trial, predict(trial.cart, trialTest, type = 'class')) %>% { sum(. * diag(2)) / sum(.) }
+performance(prediction(predict(trial.cart, trialTest)[, 2], trialTest$trial), 'auc')
+```
+
+## Assignment #3
+```{r}
+emails <- read.csv('emails.csv', stringsAsFactors = F)
+nchar(emails$text) %>% summary
+
+dtm <- emails$text %>% VectorSource %>% Corpus %>% tm_map(content_transformer(tolower)) %>%
+  tm_map(removePunctuation) %>% tm_map(removeWords, stopwords('english')) %>%
+  tm_map(stemDocument) %>% DocumentTermMatrix
+spdtm <- dtm %>% removeSparseTerms(sparse = .95)
+
+email.word <- spdtm %>% as.matrix %>% data.frame %>% { colnames(.) <- colnames(.) %>% make.names; . }
+email.word %>% colSums %>% sort(dec = T) %>% head
+
+email.word <- email.word %>% mutate(spam = emails$spam)
+email.word %>% filter(spam == 0) %>% colSums %>% { . >= 5000 } %>% sum
+email.word %>% filter(spam == 1) %>% colSums %>% { . >= 1000 } %>% sum
+email.word$spam <- as.factor(email.word$spam)
+
+library(caTools)
+set.seed(123)
+split <- sample.split(email.word$spam, SplitRatio = .7)
+emailTrain <- email.word[split, ]
+emailTest <- email.word[!split, ]
+
+library(rpart)
+library(randomForest)
+email.logistic <- glm(spam ~ ., emailTrain, family = binomial)
+sum(predict(email.logistic, emailTrain, type = 'response') < 0.00001)
+sum(predict(email.logistic, emailTrain, type = 'response') > 0.99999)
+summary(email.logistic)
+table(emailTrain$spam, predict(email.logistic, emailTrain, type = 'response') > 0.5) %>% { sum(. * diag(2)) / sum(.) }
+performance(prediction(predict(email.logistic, emailTrain, type = 'response'), emailTrain$spam), 'auc')
+table(emailTest$spam, predict(email.logistic, emailTest, type = 'response') > 0.5) %>% { sum(. * diag(2)) / sum(.) }
+performance(prediction(predict(email.logistic, emailTest, type = 'response'), emailTest$spam), 'auc')
+
+email.cart <- rpart(spam ~ ., emailTrain)
+prp(email.cart)
+table(emailTrain$spam, predict(email.cart, emailTrain, type = 'class')) %>% { sum(. * diag(2)) / sum(.) }
+performance(prediction(predict(email.cart, emailTrain)[, 2], emailTrain$spam), 'auc')
+table(emailTest$spam, predict(email.cart, emailTest, type = 'class')) %>% { sum(. * diag(2)) / sum(.) }
+performance(prediction(predict(email.cart, emailTest)[, 2], emailTest$spam), 'auc')
+
+email.rf <- randomForest(spam ~ ., emailTrain)
+table(emailTrain$spam, predict(email.rf, emailTrain)) %>% { sum(. * diag(2)) / sum(.) }
+performance(prediction(predict(email.rf, emailTrain, type = 'prob')[, 2], emailTrain$spam), 'auc')
+table(emailTest$spam, predict(email.rf, emailTest)) %>% { sum(. * diag(2)) / sum(.) }
+performance(prediction(predict(email.rf, emailTest, type = 'prob')[, 2], emailTest$spam), 'auc')
+
+```
+
+## Assignment #4
+```{r}
+
+```
+

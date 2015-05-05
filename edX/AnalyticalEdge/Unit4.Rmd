@@ -1,0 +1,233 @@
+# Week 4
+## Judge case
+```{r}
+library(dplyr)
+
+stevens <- read.csv('stevens.csv')
+
+library(caTools)
+set.seed(3000)
+spl <- sample.split(stevens$Reverse, SplitRatio=.7)
+train <- stevens %>% filter(spl == T)
+test <- stevens %>% filter(spl == F)
+
+library(rpart)
+library(rpart.plot)
+tree <- rpart(Reverse ~ Circuit + Issue + Petitioner + Respondent + LowerCourt + Unconst, train, 
+              method='class', minbucket=100)
+prp(tree)
+predict <- predict(tree, test, type='class')
+table(test$Reverse, predict)
+
+library(ROCR)
+perf <- performance(prediction(predict(tree, test)[, 2], test$Reverse), measure='tpr', 'fpr')
+performance(prediction(predict(tree, test)[, 2], test$Reverse), measure='auc')
+
+library(randomForest)
+set.seed(200)
+forest <- randomForest(Reverse ~ Circuit + Issue + Petitioner + Respondent + LowerCourt + Unconst, 
+                       train %>% mutate(Reverse=as.factor(Reverse)),
+                       nodesize=25, ntree=200)
+predict.rf <- predict(forest, test)
+table(test$Reverse, predict.rf)
+
+library(caret)
+library(e1071)
+numFolds <- trainControl(method='cv', number=10)
+cpGrid <- expand.grid(.cp=seq(.01, .5, .01))
+train(Reverse ~ Circuit + Issue + Petitioner + Respondent + LowerCourt + Unconst,
+      train %>% mutate(Reverse=as.factor(Reverse)), method='rpart',
+      trControl=numFolds, tuneGrid=cpGrid)
+treecv <- rpart(Reverse ~ Circuit + Issue + Petitioner + Respondent + LowerCourt + Unconst,
+                train %>% mutate(Reverse=as.factor(Reverse)), cp=.17)
+predict.cv <- predict(treecv, test, type='class')
+table(test$Reverse, predict.cv)
+```
+
+## Claim case
+```{r}
+claims <- read.csv('ClaimsData.csv')
+str(claims)
+table(claims$bucket2009) %>% prop.table
+
+library(caTools)
+set.seed(88)
+split <- sample.split(claims$bucket2009, SplitRatio=.6)
+claims.train <- claims %>% filter(split == T)
+claims.test <- claims %>% filter(split == F)
+
+# baseline accuracy: 68.4%
+table(claims.test$bucket2009, claims.test$bucket2008) %>% { sum(. * diag(5)) / sum(.) }
+
+# baseline penalty: 0.7386055
+penalty.mat <- matrix(0, 5, 5)
+for (x in 1:5) {
+  for (y in 1:5) {
+    penalty.mat[x, y] <- ifelse(x == y, 0, ifelse(x > y, 2 * (x - y), y - x))
+  }
+}
+table(claims.test$bucket2009, claims.test$bucket2008) %>% as.matrix %>% { . * penalty.mat } %>% { sum(.) / NROW(claims.test) }
+
+table(claims.test$bucket2009, rep(1, length(claims.test$bucket2009))) %>% prop.table
+table(claims.test$bucket2009, rep(1, length(claims.test$bucket2009))) %>% as.matrix %>% { . * penalty.mat[, 1] } %>% sum
+
+library(rpart)
+library(rpart.plot)
+claims.tree <- rpart(bucket2009 ~ . - reimbursement2009, claims.train, method='class', cp=.00005)
+prp(claims.tree)
+
+claims.pred <- predict(claims.tree, claims.test, type='class')
+# accuracy: 71.2%
+table(claims.test$bucket2009, claims.pred) %>% { sum(. * diag(5)) / sum(.) }
+# penalty: 0.7578902
+table(claims.test$bucket2009, claims.pred) %>% { . * penalty.mat } %>% { sum(.) / NROW(claims.test) }
+
+# penalty를 감안해서 다시 CART모델 만든다
+claims.tree <- rpart(bucket2009 ~ . - reimbursement2009, claims.train, method='class', cp=.00005, parms=list(loss=penalty.mat))
+claims.pred <- predict(claims.tree, claims.test, type='class')
+# accuracy: 64.7%
+table(claims.test$bucket2009, claims.pred) %>% { sum(. * diag(5)) / sum(.) }
+# penalty: 0.6418161
+table(claims.test$bucket2009, claims.pred) %>% { . * penalty.mat } %>% { sum(.) / NROW(claims.test) }
+```
+
+## Assignment 1
+```{r}
+gerber <- read.csv('gerber.csv')
+table(gerber$voting) %>% prop.table
+
+library(tidyr)
+gerber %>% gather(var, value, hawthorne:control) %>% filter(value == 1) %>% { table(.$voting, .$var) } %>% prop.table(2)
+
+gerber.model1 <- glm(voting ~ civicduty + hawthorne + self + neighbors, gerber, family=binomial)
+summary(gerber.model1)
+table(gerber$voting, predict(gerber.model1, gerber, type='response') > 0.3) %>% { sum(. * diag(2)) / sum(.) }
+table(gerber$voting, predict(gerber.model1, gerber, type='response') > 0.5) %>% prop.table
+
+library(ROCR)
+performance(prediction(predict(gerber.model1, gerber), gerber$voting), 'tpr', 'fpr') %>% plot
+
+library(rpart)
+library(rpart.plot)
+gerber.model2 <- rpart(voting ~ civicduty + hawthorne + self + neighbors + sex, gerber, cp=.0)
+prp(gerber.model2)
+
+gerber.model3 <- rpart(voting ~ control, gerber, cp=.0)
+gerber.model4 <- rpart(voting ~ control + sex, gerber, cp=.0)
+prp(gerber.model3, digits=6)
+prp(gerber.model4)
+
+gerber.model5 <- glm(voting ~ control + sex, gerber, family=binomial)
+summary(gerber.model5)
+predict(gerber.model5, data.frame(sex=c(0,0,1,1), control=c(0,1,0,1)), type='response')
+
+gerber.model5 <- glm(voting ~ control + sex + sex:control, gerber, family=binomial)
+summary(gerber.model5)
+predict(gerber.model5, data.frame(sex=c(0,0,1,1), control=c(0,1,0,1)), type='response')
+```
+
+## assignment 2
+```{r}
+letters <- read.csv('letters_ABPR.csv')
+
+letters$isB <- as.factor(letters$letter == 'B')
+set.seed(1000)
+
+library(caTools)
+split <- sample.split(letters$isB, SplitRatio=.5)
+letters.train <- letters %>% filter(split == T)
+letters.test <- letters %>% filter(split == F)
+
+# baseline
+table(letters.test$isB) %>% prop.table
+
+library(rpart)
+model1 <- rpart(isB ~ . - letter, letters.train, method='class')
+pred1 <- predict(model1, letters.test, type='class')
+table(letters.test$isB, pred1) %>% { sum(. * diag(2)) / sum(.) }
+
+library(randomForest)
+set.seed(1000)
+model2 <- randomForest(isB ~ . - letter, letters.train)
+pred2 <- predict(model2, letters.test)
+table(letters.test$isB, pred2) %>% { sum(. * diag(2)) / sum(.) }
+
+letters <- letters %>% mutate(letter=as.factor(letter), isB=NULL)
+set.seed(2000)
+split <- sample.split(letters$letter, SplitRatio=.5)
+letters.train <- letters %>% filter(split == T)
+letters.test <- letters %>% filter(split == F)
+
+# baseline
+table(letters.test$letter) %>% prop.table
+
+# CART
+model1 <- rpart(letter ~ ., letters.train, method='class')
+pred1 <- predict(model1, letters.test, type='class')
+table(letters.test$letter, pred1) %>% { sum(. * diag(4)) / sum(.) }
+
+# Random forest
+model2 <- randomForest(letter ~ ., letters.train)
+pred2 <- predict(model2, letters.test)
+table(letters.test$letter, pred2) %>% { sum(. * diag(4)) / sum(.) }
+```
+
+## assignment 3
+```{r}
+census <- read.csv('census.csv')
+
+library(caTools)
+set.seed(2000)
+split <- sample.split(census$over50k, SplitRatio=.6)
+census.train <- census[split, ]
+census.test <- census[!split, ]
+
+# logistic regression
+model1 <- glm(over50k ~ ., census.train, family=binomial)
+summary(model1)
+pred1 <- predict(model1, census.test, type='response')
+table(census.test$over50k, pred1 > 0.5) %>% { sum(. * diag(2)) / sum(.) }
+table(census.test$over50k) %>% prop.table
+
+library(ROCR)
+performance(prediction(pred1, census.test$over50k), 'auc')
+
+# CART
+library(rpart)
+library(rpart.plot)
+model2 <- rpart(over50k ~ ., census.train, method='class')
+summary(model2)
+prp(model2)
+pred2 <- predict(model2, census.test, type='class')
+table(census.test$over50k, pred2) %>% { sum(. * diag(2)) / sum(.) }
+table(census.test$over50k) %>% prop.table
+
+performance(prediction(pred1, census.test$over50k), 'tpr', 'fpr') %>% plot
+performance(prediction(predict(model2, census.test)[, 2], census.test$over50k), 'tpr', 'fpr') %>% plot
+performance(prediction(predict(model2, census.test)[, 2], census.test$over50k), 'auc')
+
+# Random forest
+library(randomForest)
+set.seed(1)
+model3 <- randomForest(over50k ~ ., census.train[sample(nrow(census.train), 2000), ])
+pred3 <- predict(model3, census.test)
+table(census.test$over50k, pred3) %>% { sum(. * diag(2)) / sum(.) }
+
+vu <- varUsed(model3, count=T)
+vu.sort <- sort(vu, decreasing=F, index.return=T)
+dotchart(vu.sort$x, names(model3$forest$xlevels[vu.sort$ix]))
+
+varImpPlot(model3)
+
+# CART (selecting CP by cross-validation)
+library(caret)
+cartGrid <- expand.grid(.cp = seq(.002, .1, .002))
+model4 <- train(over50k ~ ., census.train, method='rpart', 
+                trControl=trainControl(method='cv', number=10), 
+                tuneGrid=cartGrid)
+pred4 <- predict(model4, census.test)
+table(census.test$over50k, pred4) %>% { sum(. * diag(2)) / sum(.) }
+
+prp(model4$finalModel)
+str(model4$finalModel)
+```
