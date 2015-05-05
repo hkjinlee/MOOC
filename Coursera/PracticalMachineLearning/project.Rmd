@@ -1,0 +1,70 @@
+'Practical Machine Learning' Assignment
+---------------------------------------
+
+## Data import
+- I start with importing the training set.
+- Training set will be modified to have fewer variables. So it's named 'training.raw' at this stage.
+- Raw training set has 19,622 rows and 160 variables.
+
+```{r, message=FALSE}
+
+training.raw <- read.csv('data/pml-training.csv')
+dim(training.raw)
+```
+
+## Data preparation
+- [dplyr](https://github.com/hadley/dplyr) is used for preparing training set.
+- Training set seems to have two types of data: the ones with new_window == 'no' and the ones with 'yes'. The latter looks like some averaged statistics of the raw data, and the test set doesn't have them at all. So I'll filter them out.
+- There're some derived variables such as average, variance, skewness, kurtosis, etc, and test set doesn't have any of them as well. So these variables are excluded from model fitting.
+- Additionally, username, case ID(column name 'X'), timestamp variants will be also excluded.
+- The training set now has 19,216 rows and 53 variables now.
+
+```{r, warning=FALSE}
+library(dplyr)
+
+training <- training.raw %>% 
+  filter(new_window == 'no') %>% 
+  select(-matches('^(avg|var|stddev|skewness|kurtosis|max|min|amplitude)')) %>%
+  select(-X, -user_name, -matches('window|timestamp'))
+
+dim(training)
+colnames(training)
+```
+
+## Data visualization using PCA
+- Exploratory data analysis using PCA(Principal Component Analysis)
+- There're lots of features in the dataset, and PC1 and PC2 can explain just 31% of total variance.
+- Once plotted, I can see five big clusters(probably related to 5 classes) and classe A(red dot) be partially separated from others.
+- But due to the low coverage of PC1 and PC2, class separation is limited at this stage.
+
+```{r}
+library(ggplot2)
+
+prcomp <- prcomp(~ . - classe, data=training, center=T, scale=T, retx=T)
+summary(prcomp)
+ggplot(aes(x=prcomp$x[, 1], y=prcomp$x[, 2], color=classe), data=training) + geom_point(alpha=.3) +
+  labs(x='PC1', y='PC2')
+```
+
+## Model fitting
+- I chose Random forests for the model, which doesn't require cross-validation or separate test set ([cite](http://www.stat.berkeley.edu/~breiman/RandomForests/cc_home.htm#ooberr)).
+- The fitted model uses 7 features for splitting the node, and OOB estimate of error rate is around 0.3%, which is quite impressive.
+
+```{r, message=FALSE}
+library(caret)
+
+fit <- train(classe ~ ., training, method='rf', tuneLength=1, trControl=trainControl(method='none'))
+fit$finalModel
+```
+
+## Prediction using the test set
+- Finally, make predictions using the test set and write the results to files.
+- Output files will be created under 'output/' directory.
+
+```{r, message=FALSE}
+testing <- read.csv('data/pml-testing.csv')
+pred <- predict(fit, testing)
+Map(function(i) write.table(pred[i], file=sprintf('output/problem_id_%d.txt', i), 
+                            quote=F, row.names=F, col.names=F), 
+    1:length(pred))
+```
